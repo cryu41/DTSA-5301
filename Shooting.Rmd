@@ -1,0 +1,163 @@
+---
+title: "NYPD Shooting Incident Data Report"
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load Libraries
+```{r}
+library("tidyverse")
+library("lubridate")
+library("tsibble")
+```
+
+## Download And Prepare Data
+```{r}
+url = "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv"
+shooting <- read_csv(url)
+```
+
+## Tidy And Transform Data
+From getting the unique values of BORO, we can see that this data set has <b>QUEENS</b>, <b>BRONX</b>, <b>BROOKLYN</b>, <b>MANHATTAN</b> and <b>STATEN ISLAND</b> regions inside of the data set.
+```{r}
+unique(shooting$BORO)
+```
+
+Keep the interesting columns and mutate the <b>OCCUR_DATE</b> into date object. Also create a new column named <b>year_month</b> to aid later plotting.
+```{r}
+shooting <- shooting %>% 
+  select(c(OCCUR_DATE, OCCUR_TIME, BORO, PERP_AGE_GROUP, PERP_SEX, PERP_RACE, 
+           VIC_AGE_GROUP, VIC_SEX, VIC_RACE)) %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+
+shooting$year_month <- yearmonth(shooting$OCCUR_DATE)
+```
+
+## Analysis
+Do a quick <b>head()</b> to the data and we can see many missing values in <b>PERP_AGE_GROUP</b>, <b>PERP_SEX</b> and <b>PERP_RACE</b>. Probably because the suspect was not identified during the collection of these data.
+```{r}
+head(shooting, n = 5)
+```
+
+In fact, around 34% of those columns are NA.
+```{r}
+sum(is.na(shooting$PERP_AGE_GROUP)) / length(shooting$PERP_AGE_GROUP) * 100
+sum(is.na(shooting$PERP_SEX)) / length(shooting$PERP_SEX) * 100
+sum(is.na(shooting$PERP_RACE)) / length(shooting$PERP_RACE) * 100
+```
+
+To understand the differences between each regions, a function to calculate the ratios of NA values in each of the BORO values are prepared.
+```{r}
+unknown_prep_ratio <- function(df, boro) { 
+  tmp_df <- df %>% filter(BORO == boro)
+  print(paste("Unknown PERP_AGE_GROUP: ", 
+              round(sum(is.na(tmp_df$PERP_AGE_GROUP)) / length(tmp_df$PERP_AGE_GROUP) * 100, 2), "%"))
+  print(paste("Unknown PERP_SEX: ", 
+              round(sum(is.na(tmp_df$PERP_SEX)) / length(tmp_df$PERP_SEX) * 100, 2), "%"))
+  print(paste("Unknown PERP_RACE: ", 
+              round(sum(is.na(tmp_df$PERP_RACE)) / length(tmp_df$PERP_RACE) * 100, 2), "%")) 
+}
+```
+
+Call the function to calculated the NA ratio in each values in BORO. As a result, <u><b>BROOKLYN had the highest NA ratio and Staten Island had the least</b></u>.
+```{r}
+unknown_prep_ratio(shooting, "QUEENS")
+unknown_prep_ratio(shooting, "BRONX")
+unknown_prep_ratio(shooting, "BROOKLYN")
+unknown_prep_ratio(shooting, "MANHATTAN")
+unknown_prep_ratio(shooting, "STATEN ISLAND")
+```
+
+## Visualization
+To compare the counts of each region, it would be much easier to compare once plotted onto a bar chart. We can see in the chart that <u><b>BROOKLYN has the highest count, and STATEN ISLAND has the least</b></u>. This is aligned to the analysis of the NA ratio of each regions.
+```{r}
+shooting_boro_count = c(length((shooting %>% filter(BORO=="QUEENS"))$OCCUR_DATE),
+                        length((shooting %>% filter(BORO=="BRONX"))$OCCUR_DATE),
+                        length((shooting %>% filter(BORO=="BROOKLYN"))$OCCUR_DATE),
+                        length((shooting %>% filter(BORO=="MANHATTAN"))$OCCUR_DATE),
+                        length((shooting %>% filter(BORO=="STATEN ISLAND"))$OCCUR_DATE))
+df <- data.frame(x = c("QUEENS", "BRONX", "BROOKLYN", "MANHATTAN", "STATEN ISLAND"), 
+                 y = shooting_boro_count)
+ggplot(df, aes(x = x, y = y)) + 
+  geom_col() +
+  xlab("BORO") + 
+  ylab("Count") + 
+  ggtitle("Bar Chart BORO Count")
+```
+
+Another question one could answer is does gun violent case dropped during the start of COVID-19, which WHO declared the beginning of the pandemic in March 11th, 2020. <u><b>My initial assumption is that the numbers of shooting incidents would drop</b></u>, as people tend to stay home more to avoid from getting COVID virus.
+
+Prepare the function to perform the plot. This function will first prepare a new data frame to store the count of shootings each month. Then it will use that new data frame to create the plot.
+```{r}
+plot_shooting_count <- function(df, boro="BROOKLYN") {
+
+  shooting_count <- df %>%
+    filter(BORO == boro) %>%
+    group_by(year_month) %>%
+    summarize(count = n())
+  
+  shooting_count %>%
+    ggplot(aes(x = year_month, y = count)) + 
+    geom_line(aes(color = "count")) + 
+    geom_point(aes(color = "count")) + 
+    scale_y_log10() + 
+    theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) + 
+    labs(title = boro, y = NULL)
+}
+```
+
+Then, create the plot for BROOKLYN data, as it has the highest count and highest NA ratio, making it an interesting target to analyze.
+```{r}
+plot_shooting_count(shooting, "BROOKLYN")
+```
+<br>To my surprise, <u><b>the shooting case actually increased in the first half of 2020</b></u>. This suggests that for some reason COVID might cause more shooting incident to occur. More analysis and data are required to take a deeper dive to understand what really happened.
+
+Just to confirm, plot all the other BORO values.
+```{r}
+plot_shooting_count(shooting, "QUEENS")
+plot_shooting_count(shooting, "BRONX")
+plot_shooting_count(shooting, "MANHATTAN")
+plot_shooting_count(shooting, "STATEN ISLAND")
+```
+<br>All graph shows an uptrend growth in the first half of 2020.
+
+## Modeling
+Create a model to predict the counts per month with a linear model. First, create the <b>shooting_brooklyn_count</b> object to store the count of shooting incidents per month for <b>BROOKLYN</b>. Then create the model to predict incident counts with date information.
+```{r}
+shooting_brooklyn_count <- shooting %>%
+  filter(BORO=="BROOKLYN") %>%
+  group_by(year_month) %>%
+  summarize(count = n())
+
+mod <- lm(count ~ year_month, data = shooting_brooklyn_count)
+```
+
+Make prediction and place it back into the <b>shooting_brooklyn_count</b> object.
+```{r}
+shooting_brooklyn_count <- shooting_brooklyn_count %>%
+  mutate(pred = predict(mod))
+```
+
+Plot the result to compare it against the real data. In this plot blue dot represents the real data, and red is the predicted value.
+```{r}
+shooting_brooklyn_count %>%
+  ggplot() +
+  geom_point(aes(x = year_month, y = count), color = "blue") +
+  geom_point(aes(x = year_month, y = pred), color = "red")
+```
+<br>It is interesting to see that even though a linear model is created to predict counts only by using dates, the prediction created by the model could still find a line that basically go through the center of the real data (blue dots). However the model could not cope with the sudden raise of counts in the beginning of 2020. This suggest that a more complicated model might be required to make a more precised prediction.
+
+## Conclusion
+Data from the <u><b>NYPD Shooting Incident Data (Historic)</b></u> was analyzed. The findings are as follow:<br><br>
+ 1. More than 30% of the data regarding to the criminal are missing values. This might suggest that those suspects were not clearly identified during the collection period of this data set.<br><br>
+ 2. Within all the regions in the data, Brooklyn has the highest count in shooting incidents.<br><br>
+ 3. A simple linear model might be good to predict the counts, but it does not deal with outliers well, thus a more complicated model would be required.<br><br>
+ 4. My personal bias is that I assumed the start of the pandemic would decrease the shooting incident count, but it did not. To mitigate this and to understand why the number increased, more data such as job employment rate should be analyzed.<br><br>
+<br><br><br>
