@@ -1,0 +1,182 @@
+---
+title: "Final Project 2: Reproducible Report on COVID19 Data"
+author: ''
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load Libraries
+The following libraries are used. Please use the <b>install.packages</b> function to install.<br>
+1. tidyverse<br>
+2. lubridate<br>
+3. tsibble<br>
+```{r}
+library("tidyverse")
+library("lubridate")
+library("tsibble")
+```
+
+## Download data
+The analysis for this final project will be focusing on the global data, hence I will not download the US data here.
+```{r}
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names = c("time_series_covid19_confirmed_global.csv", "time_series_covid19_deaths_global.csv", "time_series_covid19_confirmed_US.csv", "time_series_covid19_deaths_US.csv")
+urls <- str_c(url_in, file_names)
+
+global_cases <-read_csv(urls[1])
+global_deaths <-read_csv(urls[2])
+```
+
+## Tidy up the data
+Looking into the data we can see that there are more than 1000 columns that stores the number of COVID cases in each day. Just like in the lecture, use the <b>pivot_longer</b> function to transform those columns into rows.
+
+Before using <b>pivot_longer</b>:
+```{r}
+head(global_cases, n = 3)
+```
+
+Transform the data.
+```{r}
+global_cases <- global_cases %>%
+  pivot_longer(cols=-c('Province/State', 'Country/Region', Lat, Long), names_to="date", values_to="cases") %>%
+  select(-c(Lat, Long))
+```
+
+After the <b>pivot_longer</b> function:
+```{r}
+head(global_cases, n = 3)
+```
+
+<b>global_deaths</b> has the same column structure as <b>global_cases</b> prior to the transformation. So here I will repeat the same steps to tidy the dataframe up.
+```{r}
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c(`Province/State`, `Country/Region`, Lat, Long), names_to = "date", values_to = "deaths") %>%
+  select(-c(Lat, Long))
+```
+
+Join <b>global_cases</b> and <b>globl_deaths</b> into one DataFrame object, and convert the date column into date object. The new dataframe object here is called <b>global</b>.
+```{r join_rename_date}
+global <- global_cases %>%
+    full_join(global_deaths) %>%
+    rename(Country_Region = `Country/Region`, Province_State = `Province/State`) %>%
+    mutate(date = mdy(date))
+```
+
+## Analysis
+I would like use the most up to date number in the dataset to answer the following questions:<br>
+1. What are the 5 countries with the most death count<br>
+2. What are the 5 countries with the highest death count ratio in terms of the number of cases<br>
+
+First, find out the maximum value of the date object that I just converted, and the result is <b>2023-03-09</b>
+```{r}
+max(global$date)
+```
+
+Next would be to create a dataframe object storing all the countries and the ratios of the target date, which is <b>2023-03-09</b>. However, in the data, there are countries that has multiple rows for a single date if the <b>Province_State</b> are also documented inside of the dataframe. For example <b>Australia</b>.
+```{r}
+global %>% filter(Country_Region == "Australia") %>% filter(date == "2023-03-09")
+```
+
+To make it easier to analyze, add up all the numbers for countries that has multiple rows in a day, and save that to a new dataframe named <b>global_new</b>.
+```{r}
+target_date = "2023-03-09"
+countries = c()
+cases_num = c()
+deaths_num = c()
+for(country in unique(global$Country_Region)) {
+  countries <- append(countries, country)
+  
+  cases_sum = sum(global %>% filter(Country_Region == country) %>% filter(date == target_date) %>% select(cases))
+  cases_num = append(cases_num, cases_sum)
+  deaths_sum = sum(global %>% filter(Country_Region == country) %>% filter(date == target_date) %>% select(deaths))
+  deaths_num = append(deaths_num, deaths_sum)
+}
+
+global_new = data.frame(Country = countries, Cases = cases_num, Deaths = deaths_num)
+```
+
+With the new <b>global_new</b> dataframe, all numbers are now aggregated into a single row, also only date with <b>2023-03-09</b> are preserved.
+```{r}
+global_new %>% filter(Country == "Australia")
+```
+
+Now, calculate the ratios and convert the result into percentages with the new <b>global_new</b> dataframe.
+```{r}
+global_new$Ratio = round((global_new$Deaths / global_new$Cases) * 100, 2)
+```
+
+Although it may seem that the preparation for visualization has been done at this point, if we order the rows in descending order and just output the first 5 lines, we can see <b>Korea, North</b> which has a ratio value of 600%, and <b>MS Zaandam</b> which is a cruise ship, not a country.
+```{r}
+head(global_new[order(-global_new$Ratio),])
+```
+
+In the case for <b>Korea, North</b>, I have decided to just drop it because you can't have more death numbers than cases reported, as one can raise the question about if those death counts are really relevant to COVID or not. Also I have decided to drop <b>MS Zaandam</b> as well, as I am only interested in ratios of countries.<br><br>
+This can be done by simply remove the first 2 rows for the ordered dataframe. The new dataframe is <b>global_new_ratio</b>.<br><br>
+<b>Note</b>: There are other entries that are neither country nor region in the dataset, such as <b>Summer Olympics 2020</b> or <b>Winter Olympics 2022</b>, but I have decided to ignore those rows as their death percentage is very low and thus won't affect the result of my analysis.
+```{r}
+global_new_ratio <- global_new[order(-global_new$Ratio),]
+global_new_ratio <- tail(global_new_ratio, -2)
+```
+
+Also, I created a new dataframe called <b>global_new_death</b>, storing the content that is exactly the same as <b>global_news</b>, but in a descending order according to the deaths counts
+```{r}
+global_new_death <- global_new[order(-global_new$Deaths),]
+```
+
+Now we are good to go.
+
+## Visualization
+First, plot the top 5 countries that has the highest death counts. Here we can see that the <b>US</b> has the highest death count within all the countries inside of the dataset.
+```{r}
+top_5_countries = head(global_new_death, 5)
+ggplot(top_5_countries, aes(x = Country, y = Deaths)) + 
+  geom_col() +
+  xlab("Country") + 
+  ylab("Count") + 
+  ggtitle("Top 5 countries with high death count")
+```
+
+Next would be to plot the top 5 countries with the highest death ratio in terms of the number of cases reported.<br><br>
+Here we can see that <b>Yemen</b>'s death ratio stands out and <b>US</b>'s ratio is not within the top 5 countries in this plot.
+```{r}
+top_5_countries = head(global_new_ratio, 5)
+ggplot(top_5_countries, aes(x = Country, y = Ratio)) + 
+  geom_col() +
+  xlab("Country") + 
+  ylab("Ratio (Percentage)") + 
+  ggtitle("Top 5 countries with high death ratio")
+```
+
+## Modeling
+Lastly, create a model to predict the death counts via case numbers for <b>Yemen</b> with a linear model. <b>Yemen</b> is chosen because it has the highest death ratio as shown in previous plot. Here I have created the <b>yemen</b> object to store the case count and death count for <b>Yemen</b>. Then create the model to predict the number of death with case count.
+```{r}
+yemen = global %>% filter(Country_Region == "Yemen")
+mod <- lm(deaths ~ cases, data = yemen)
+yemen <- yemen %>% mutate(pred = predict(mod))
+```
+
+Plot the graph with the predicted value and the ground truth in the dataset.
+```{r}
+yemen %>%
+  ggplot() +
+  geom_point(aes(x = cases, y = deaths), color = "blue") +
+  geom_point(aes(x = cases, y = pred), color = "red")
+```
+
+The red line here is the predicted death number. As we can see through this plot, the linear model make pretty good prediction from the number of cases.
+
+## Conclusions and Discoveries
+1. In this target data set, the country with highest death ratio in terms of case count is <b>Yemen</b>.<br><br>
+2. My personal bias was that I assumed <b>US</b> would have the highest death ratio as <b>US</b>'s number of death in this dataset is the highest among all countries and regions. However it turns out that this is wrong after careful calculation of the ratio for all countries.<br><br>
+3. Would be better to look inside of the data and not trust the column name as it is. This proved to be important as the column <b>Country/Region</b> contained values that are not of country nor region. Ex: <b>Summer Olympics 2020</b><br><br>
+4. A linear model has proven to be sufficient to some extend to predict the number of death given the number of cases reported in this dataset.<br><br>
+
+
+
+
