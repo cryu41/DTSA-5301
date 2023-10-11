@@ -12,6 +12,10 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Load Libraries
+The following libraries are used. Please use the <b>install.packages</b> function to install.<br>
+1. tidyverse<br>
+2. lubridate<br>
+3. tsibble<br>
 ```{r}
 library("tidyverse")
 library("lubridate")
